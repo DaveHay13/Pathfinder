@@ -1,0 +1,18 @@
+{
+  "name": "pathfinder",
+  "version": "1.2.0",
+  "description": "Autonomous Test Locator Intelligence System",
+  "scripts": {
+    "crawl": "npx ts-node src/pf/crawl.ts",
+    "scan": "npx ts-node src/pf/scan_locators.ts",
+    "pathfinder": "npx ts-node src/pf/orchestrate.ts"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.0"
+  }
+}
