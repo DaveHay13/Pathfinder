@@ -1,5 +1,6 @@
 // src/pf/crawl.ts
 import { chromium } from "playwright";
+import { logger } from "./logger";
 import fs from "fs";
 import path from "path";
 
@@ -99,23 +100,26 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
   return out;
 }
 
-/**
- * Pathfinder Web Crawler
- * 
- * Usage:
- *   npx ts-node src/pf/crawl.ts https://www.imdb.com/ --maxPages=50 --maxDepth=2 --sameHost=true
- *
- * Options:
- *   --maxPages=50    Maximum pages to discover (default: 50)
- *   --maxDepth=2     Maximum link depth to follow (default: 2)
- *   --sameHost=true  Only crawl same hostname (default: true)
- *
- * Example:
- *   npx ts-node src/pf/crawl.ts https://github.com --maxPages=20 --maxDepth=1
- */
 (async () => {
   const seedArg = process.argv[2] && !process.argv[2].startsWith("--") ? process.argv[2] : null;
-  const seedUrlRaw = seedArg || "https://www.imdb.com/";
+  
+  if (!seedArg) {
+    logger.error("Error: No URL provided");
+    logger.error("");
+    logger.error("Usage: npx ts-node src/pf/crawl.ts <URL> [OPTIONS]");
+    logger.error("");
+    logger.error("Examples:");
+    logger.error("  npx ts-node src/pf/crawl.ts https://example.com --maxPages=10");
+    logger.error("  npx ts-node src/pf/crawl.ts https://bank.example.com --maxDepth=2");
+    logger.error("");
+    logger.error("Options:");
+    logger.error("  --maxPages=N     Maximum pages to crawl (default: 50)");
+    logger.error("  --maxDepth=N     Maximum link depth (default: 2)");
+    logger.error("  --sameHost=true  Only same hostname (default: true)");
+    process.exit(1);
+  }
+
+  const seedUrlRaw = seedArg;
 
   const maxPages =
     parseInt((process.argv.find((a) => a.startsWith("--maxPages=")) || "").split("=")[1] || "50", 10) || 50;
@@ -128,7 +132,7 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
 
   const seedNorm = normalizeUrl(seedUrlRaw);
   if (!seedNorm) {
-    console.error("Invalid seed URL:", seedUrlRaw);
+    logger.error(`Invalid seed URL: ${seedUrlRaw}`);
     process.exit(1);
   }
 
@@ -136,8 +140,9 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
   const seedHost = new URL(seedUrl).hostname.replace(/^www\./, "");
   const baseName = seedHost.split(".")[0];
 
-  console.log(`Starting crawl: ${seedUrl}`);
-  console.log(`Configuration: maxPages=${maxPages}, maxDepth=${maxDepth}, sameHost=${sameHost}`);
+  logger.info(`Starting crawl: ${seedUrl}`);
+  logger.info(`Configuration: maxPages=${maxPages}, maxDepth=${maxDepth}, sameHost=${sameHost}`);
+  logger.debug(`Host: ${seedHost}, Base name: ${baseName}`);
 
   const startedAt = nowIso();
   const id = runId();
@@ -172,7 +177,8 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
     if (visited.has(current)) continue;
     visited.add(current);
 
-    console.log(`[${visited.size}/${maxPages}] Crawling depth=${depth}: ${current}`);
+    logger.info(`[${visited.size}/${maxPages}] Crawling depth=${depth}: ${current}`);
+    logger.debug(`Queue size: ${queue.length}, Discovered: ${discovered.size}`);
 
     if (depth > maxDepth) continue;
 
@@ -185,18 +191,26 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
         as.map((a) => (a as HTMLAnchorElement).getAttribute("href") || "").filter(Boolean)
       );
 
+      logger.debug(`Found ${hrefs.length} raw hrefs on page`);
+
       const links = await extractLinks(current, hrefs);
+
+      logger.debug(`Extracted ${links.length} valid links after filtering`);
 
       for (const link of links) {
         if (sameHost) {
           const h = new URL(link).hostname.replace(/^www\./, "");
-          if (h !== seedHost) continue;
+          if (h !== seedHost) {
+            logger.debug(`Skipping external link: ${link}`);
+            continue;
+          }
         }
 
         if (!discovered.has(link)) {
           discovered.add(link);
           records.push({ url: link, depth: depth + 1, discoveredFrom: current });
           queue.push({ url: link, depth: depth + 1, from: current });
+          logger.debug(`Added to queue: ${link}`);
         }
 
         edges.push({ from: current, to: link, depth: depth + 1 });
@@ -204,7 +218,7 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
         if (discovered.size >= maxPages) break;
       }
     } catch (e: any) {
-      console.log(`Error crawling ${current}: ${e?.message || "Unknown error"}`);
+      logger.error(`Error crawling ${current}: ${e?.message || "Unknown error"}`, e);
     }
   }
 
@@ -214,7 +228,7 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
 
   const report = {
     tool: "Pathfinder",
-    version: "1.2.0",
+    version: "1.3.0",
     runId: id,
     seedUrl,
     host: seedHost,
@@ -228,6 +242,7 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
       edges: edges.length,
     },
     discoveredUrls: Array.from(discovered),
+    visitedUrls: Array.from(visited),
     records,
     edges,
   };
@@ -239,9 +254,10 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
   fs.writeFileSync(out.numbered, JSON.stringify(report, null, 2), "utf-8");
   fs.writeFileSync(out.latest, JSON.stringify(report, null, 2), "utf-8");
 
-  console.log("\nCrawl complete");
-  console.log(`Discovered: ${report.stats.discovered} URLs`);
-  console.log(`Visited: ${report.stats.visited} pages`);
-  console.log(`Edges: ${report.stats.edges} links`);
-  console.log(`\nSaved to: ${out.latest}`);
+  logger.info("\nCrawl complete");
+  logger.info(`Discovered: ${report.stats.discovered} URLs`);
+  logger.info(`Visited: ${report.stats.visited} pages`);
+  logger.info(`Edges: ${report.stats.edges} links`);
+  logger.info(`\nSaved to: ${out.latest}`);
+  logger.debug(`Also saved to: ${out.numbered}`);
 })();
