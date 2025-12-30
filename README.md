@@ -322,8 +322,7 @@ MIT License - See LICENSE file for details
 Demonstrating the power of AI-assisted development and deep domain knowledge in test automation.
 
 **Built with:** Claude (Anthropic), TypeScript, Playwright  
-**Time to MVP:** 3 days (vs 3-6 months traditional development)  
-**Cost:** ~60 EUR (vs 75,000-120,000 EUR for 3-developer team)
+
 
 ---
 
