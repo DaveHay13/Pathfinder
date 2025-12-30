@@ -247,11 +247,11 @@ Tested across 4 different site types:
 ## Development Roadmap
 
 ### Version 1.3 (Current - Portfolio Version)
-✅ Static DOM analysis with universal scoring  
-✅ Multi-format reporting (JSON, Markdown, CSV)  
-✅ Executive summaries with actionable recommendations  
-✅ Debug logging and progress tracking  
-✅ URL deduplication and timeout protection  
+ Static DOM analysis with universal scoring  
+ Multi-format reporting (JSON, Markdown, CSV)  
+ Executive summaries with actionable recommendations  
+ Debug logging and progress tracking  
+ URL deduplication and timeout protection  
 
 ### Version 2.0 (Planned - Production MVP)
 - **Temporal validation** - Weekly rescans to detect breakage
