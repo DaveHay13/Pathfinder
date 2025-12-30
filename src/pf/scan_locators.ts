@@ -261,7 +261,13 @@ async function handleCookieBanner(page: Page): Promise<void> {
   }
 }
 
-export async function scanPageLocators(url: string): Promise<PageLocatorScan> {
+// ============================================================================
+// UPDATED: Added waitAfter parameter for SPA support
+// ============================================================================
+export async function scanPageLocators(
+  url: string,
+  waitAfter: number = 3000  // UNIVERSAL DEFAULT: 3000ms for modern SPAs
+): Promise<PageLocatorScan> {
   const startTime = Date.now();
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({
@@ -280,6 +286,12 @@ export async function scanPageLocators(url: string): Promise<PageLocatorScan> {
     await page.waitForTimeout(1500);
     await handleCookieBanner(page);
     await page.waitForTimeout(500);
+
+    // NEW: Configurable wait for SPA content to load
+    if (waitAfter > 0) {
+      logger.info(`  > Waiting ${waitAfter}ms for dynamic content...`);
+      await page.waitForTimeout(waitAfter);
+    }
 
     const selectors = [
       "button", "a[href]", "input", "select", "textarea",
@@ -402,18 +414,36 @@ export async function scanPageLocators(url: string): Promise<PageLocatorScan> {
   }
 }
 
+// ============================================================================
+// CLI USAGE - UPDATED with --waitAfter flag
+// ============================================================================
 if (require.main === module) {
   if (process.argv.length < 3) {
     logger.error("Error: No URL provided");
-    logger.error("\nUsage: npx ts-node src/pf/scan_locators.ts <URL>");
-    logger.error("Example: npx ts-node src/pf/scan_locators.ts https://example.com");
+    logger.error("");
+    logger.error("Usage: npx ts-node src/pf/scan_locators.ts <URL> [OPTIONS]");
+    logger.error("");
+    logger.error("Examples:");
+    logger.error("  npx ts-node src/pf/scan_locators.ts https://example.com");
+    logger.error("  npx ts-node src/pf/scan_locators.ts https://spa-site.com --waitAfter=3000");
+    logger.error("");
+    logger.error("Options:");
+    logger.error("  --waitAfter=MS   Wait milliseconds after page load for dynamic content (SPAs)");
     process.exit(1);
   }
 
   const url = process.argv[2];
+  
+  // Parse --waitAfter flag
+  const waitAfterArg = process.argv.find(a => a.startsWith('--waitAfter='));
+  const waitAfter = waitAfterArg ? parseInt(waitAfterArg.split('=')[1], 10) : 0;
+  
   logger.info(`Scanning ${url}...`);
+  if (waitAfter > 0) {
+    logger.info(`Will wait ${waitAfter}ms for dynamic content to load`);
+  }
 
-  scanPageLocators(url)
+  scanPageLocators(url, waitAfter)
     .then(result => {
       console.log(JSON.stringify(result, null, 2));
       logger.info(`\nScan complete: ${result.stats.totalLocators} locators found`);

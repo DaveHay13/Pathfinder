@@ -58,10 +58,14 @@ function deduplicateUrls(urls: string[]): string[] {
   return unique;
 }
 
+// ============================================================================
+// UPDATED: Added waitAfter config for SPA support
+// ============================================================================
 export async function orchestrate(config: {
   crawlReportPath?: string;
   maxUrls?: number;
   delayMs?: number;
+  waitAfter?: number;  // NEW: Wait time after page load for SPAs
   reportsDir: string;
 }): Promise<SiteLocatorReport> {
   const startTime = Date.now();
@@ -94,6 +98,9 @@ export async function orchestrate(config: {
   // Load crawl data
   const crawl = JSON.parse(fs.readFileSync(crawlPath, "utf-8"));
 
+  // Auto-read waitAfter from crawl report if not provided via CLI
+  const waitAfter = config.waitAfter ?? crawl.limits?.waitAfter ?? 3000;
+
   // Use visitedUrls (actually crawled) instead of discoveredUrls
   const sourceUrls = Array.isArray(crawl.visitedUrls) && crawl.visitedUrls.length > 0
     ? crawl.visitedUrls
@@ -113,7 +120,13 @@ export async function orchestrate(config: {
   logger.info(`Pathfinder Analysis`);
   logger.info(`Crawl file: ${path.basename(crawlPath)}`);
   logger.info(`URLs to analyze: ${urls.length}`);
-  logger.info(`Delay: ${config.delayMs || 0}ms between requests\n`);
+  logger.info(`Delay: ${config.delayMs || 0}ms between requests`);
+  if (waitAfter > 0) {
+    const source = config.waitAfter ? "CLI override" : "crawl config";
+    logger.info(`SPA wait: ${waitAfter}ms after page load (${source})\n`);
+  } else {
+    logger.info("");
+  }
 
   logger.debug(`Source URLs before dedup: ${sourceUrls.length}`);
   logger.debug(`After deduplication: ${deduped.length}`);
@@ -127,7 +140,8 @@ export async function orchestrate(config: {
     logger.info(`[${i + 1}/${urls.length}] ${url}`);
 
     try {
-      const scan = await scanPageLocators(url);
+      // Pass waitAfter (from CLI or crawl config)
+      const scan = await scanPageLocators(url, waitAfter);
       const scored = scorePageScan(scan);
       pages.push(scored);
 
@@ -249,13 +263,28 @@ export async function orchestrate(config: {
   return report;
 }
 
+// ============================================================================
+// CLI USAGE - UPDATED with --waitAfter flag
+// ============================================================================
 if (require.main === module) {
   const args = process.argv.slice(2);
   
+  // Parse --waitAfter flag
+  const waitAfterArg = args.find(a => a.startsWith('--waitAfter='));
+  const waitAfter = waitAfterArg ? parseInt(waitAfterArg.split('=')[1], 10) : undefined;
+  
+  // Parse --maxUrls flag
+  const maxUrlsArg = args.find(a => a.startsWith('--maxUrls='));
+  const maxUrls = maxUrlsArg ? parseInt(maxUrlsArg.split('=')[1], 10) : undefined;
+  
+  // First non-flag argument is the crawl report path
+  const crawlPath = args.find(a => !a.startsWith('--'));
+  
   orchestrate({
-    crawlReportPath: args[0],
-    maxUrls: undefined,
+    crawlReportPath: crawlPath,
+    maxUrls: maxUrls,
     delayMs: 1000,
+    waitAfter: waitAfter,  // NEW: Pass waitAfter config
     reportsDir: path.resolve(process.cwd(), "reports"),
   })
     .then(() => logger.info("\nDone!"))

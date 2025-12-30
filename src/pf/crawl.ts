@@ -1,4 +1,4 @@
-// src/pf/crawl.ts
+// src/pf/crawl.ts - v1.3.1 - Universal 3000ms default for modern SPAs
 import { chromium } from "playwright";
 import { logger } from "./logger";
 import fs from "fs";
@@ -43,7 +43,9 @@ function isSkippableHref(href: string): boolean {
     h.startsWith("mailto:") ||
     h.startsWith("tel:") ||
     h.startsWith("javascript:") ||
-    h.startsWith("#")
+    h.startsWith("#") ||
+    h === "" ||
+    h === "/"
   );
 }
 
@@ -100,6 +102,47 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
   return out;
 }
 
+async function handleCookieBanner(page: any): Promise<void> {
+  try {
+    const cookieSelectors = [
+      'button:has-text("Accept")',
+      'button:has-text("Agree")',
+      'button:has-text("Accept all")',
+      'button:has-text("I agree")',
+      'button:has-text("Allow all")',
+      'button:has-text("OK")',
+      'button:has-text("Piekrītu")',
+      'button:has-text("Pieņemt")',
+      '[data-testid*="cookie" i] button',
+      '[data-testid*="accept" i] button',
+      '[aria-label*="cookie" i] button',
+      '[aria-label*="accept" i] button',
+      '[id*="cookie" i] button',
+      '[id*="accept" i] button',
+      '[class*="cookie" i] button',
+      '[class*="consent" i] button',
+      '.cookie-accept',
+      '.accept-cookies',
+    ];
+
+    for (const selector of cookieSelectors) {
+      try {
+        const button = page.locator(selector).first();
+        if (await button.isVisible({ timeout: 3000 })) {
+          await button.click({ timeout: 3000 });
+          await page.waitForTimeout(1000);
+          logger.info("  > Cookie banner handled");
+          return;
+        }
+      } catch {
+        // Try next selector
+      }
+    }
+  } catch (e: any) {
+    logger.debug(`  Cookie handler error: ${e.message}`);
+  }
+}
+
 (async () => {
   const seedArg = process.argv[2] && !process.argv[2].startsWith("--") ? process.argv[2] : null;
   
@@ -110,12 +153,13 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
     logger.error("");
     logger.error("Examples:");
     logger.error("  npx ts-node src/pf/crawl.ts https://example.com --maxPages=10");
-    logger.error("  npx ts-node src/pf/crawl.ts https://bank.example.com --maxDepth=2");
+    logger.error("  npx ts-node src/pf/crawl.ts https://www.optibet.lv/ --maxPages=10");
     logger.error("");
     logger.error("Options:");
     logger.error("  --maxPages=N     Maximum pages to crawl (default: 50)");
     logger.error("  --maxDepth=N     Maximum link depth (default: 2)");
     logger.error("  --sameHost=true  Only same hostname (default: true)");
+    logger.error("  --waitAfter=MS   Wait time after page load for SPAs (default: 3000)");
     process.exit(1);
   }
 
@@ -130,6 +174,10 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
   const sameHost =
     ((process.argv.find((a) => a.startsWith("--sameHost=")) || "").split("=")[1] || "true").toLowerCase() === "true";
 
+  // UNIVERSAL DEFAULT: 3000ms for modern SPAs
+  const waitAfter =
+    parseInt((process.argv.find((a) => a.startsWith("--waitAfter=")) || "").split("=")[1] || "3000", 10) || 3000;
+
   const seedNorm = normalizeUrl(seedUrlRaw);
   if (!seedNorm) {
     logger.error(`Invalid seed URL: ${seedUrlRaw}`);
@@ -141,7 +189,7 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
   const baseName = seedHost.split(".")[0];
 
   logger.info(`Starting crawl: ${seedUrl}`);
-  logger.info(`Configuration: maxPages=${maxPages}, maxDepth=${maxDepth}, sameHost=${sameHost}`);
+  logger.info(`Configuration: maxPages=${maxPages}, maxDepth=${maxDepth}, sameHost=${sameHost}, waitAfter=${waitAfter}ms`);
   logger.debug(`Host: ${seedHost}, Base name: ${baseName}`);
 
   const startedAt = nowIso();
@@ -150,7 +198,7 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     viewport: { width: 1366, height: 900 },
   });
 
@@ -174,34 +222,51 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
     const current = item.url;
     const depth = item.depth;
 
-    if (visited.has(current)) continue;
+    if (visited.has(current)) {
+      logger.debug(`Skipping already visited: ${current}`);
+      continue;
+    }
+
+    // CRITICAL FIX: Check depth BEFORE visiting to avoid wasting crawl budget
+    if (depth > maxDepth) {
+      logger.debug(`Skipping ${current} - depth ${depth} exceeds maxDepth=${maxDepth}`);
+      continue;
+    }
+
     visited.add(current);
 
     logger.info(`[${visited.size}/${maxPages}] Crawling depth=${depth}: ${current}`);
     logger.debug(`Queue size: ${queue.length}, Discovered: ${discovered.size}`);
 
-    if (depth > maxDepth) continue;
-
     try {
-      await page.goto(current, { waitUntil: "commit", timeout: 60000 });
+      await page.goto(current, { waitUntil: "domcontentloaded", timeout: 60000 });
       await page.waitForLoadState("domcontentloaded", { timeout: 60000 }).catch(() => {});
-      await page.waitForTimeout(600);
+      
+      await page.waitForTimeout(800);
+      
+      await handleCookieBanner(page);
+      
+      if (waitAfter > 0) {
+        logger.debug(`  Waiting ${waitAfter}ms for dynamic content...`);
+        await page.waitForTimeout(waitAfter);
+      }
 
       const hrefs = await page.$$eval("a[href]", (as) =>
         as.map((a) => (a as HTMLAnchorElement).getAttribute("href") || "").filter(Boolean)
       );
 
-      logger.debug(`Found ${hrefs.length} raw hrefs on page`);
+      logger.debug(`  Found ${hrefs.length} raw hrefs on page`);
 
       const links = await extractLinks(current, hrefs);
 
-      logger.debug(`Extracted ${links.length} valid links after filtering`);
+      logger.debug(`  Extracted ${links.length} valid links after filtering`);
 
+      let addedCount = 0;
       for (const link of links) {
         if (sameHost) {
           const h = new URL(link).hostname.replace(/^www\./, "");
           if (h !== seedHost) {
-            logger.debug(`Skipping external link: ${link}`);
+            logger.debug(`  Skipping external link: ${link}`);
             continue;
           }
         }
@@ -210,15 +275,22 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
           discovered.add(link);
           records.push({ url: link, depth: depth + 1, discoveredFrom: current });
           queue.push({ url: link, depth: depth + 1, from: current });
-          logger.debug(`Added to queue: ${link}`);
+          addedCount++;
+          logger.debug(`  > Added to queue: ${link}`);
         }
 
         edges.push({ from: current, to: link, depth: depth + 1 });
 
-        if (discovered.size >= maxPages) break;
+        if (discovered.size >= maxPages) {
+          logger.debug(`  Reached maxPages limit (${maxPages}), stopping link discovery`);
+          break;
+        }
       }
+
+      logger.info(`  > Discovered ${addedCount} new URLs from this page`);
+
     } catch (e: any) {
-      logger.error(`Error crawling ${current}: ${e?.message || "Unknown error"}`, e);
+      logger.error(`  > Error crawling ${current}: ${e?.message || "Unknown error"}`, e);
     }
   }
 
@@ -228,12 +300,12 @@ async function extractLinks(pageUrl: string, hrefs: string[]): Promise<string[]>
 
   const report = {
     tool: "Pathfinder",
-    version: "1.3.0",
+    version: "1.3.1",
     runId: id,
     seedUrl,
     host: seedHost,
     sameHost,
-    limits: { maxPages, maxDepth },
+    limits: { maxPages, maxDepth, waitAfter },
     startedAt,
     finishedAt,
     stats: {
